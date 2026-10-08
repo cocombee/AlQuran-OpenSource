@@ -71,25 +71,28 @@ def check():
 
 
 def audition(prompt_path, output_prefix, takes):
+    if takes != 1:
+        raise RuntimeError('Each authorized audition sends exactly one paid request.')
     text = Path(prompt_path).read_text(encoding='utf-8').strip()
     if not text or len(text) > MODEL_REQUEST_CHARACTER_LIMIT:
         raise RuntimeError('Approved input must contain 1–10,000 characters including all cues for verified Eleven v4.')
     prefix = Path(output_prefix).resolve()
-    if TASK_ROOT not in prefix.parents:
-        raise RuntimeError('Audition outputs must stay inside the canonical task.')
+    if prefix == TASK_ROOT or TASK_ROOT in prefix.parents:
+        raise RuntimeError('Keep unaccepted auditions outside the repository in temporary local storage.')
     destinations = [Path(str(prefix) + ' - Generation %s.mp3' % n) for n in range(1, takes + 1)]
     receipt_path = Path(str(prefix) + ' - API Receipt.json')
     if any(p.exists() for p in destinations + [receipt_path]):
         raise RuntimeError('Output already exists; choose a new audition version.')
     if not prefix.parent.is_dir():
         raise RuntimeError('Output directory must already exist.')
-    receipt = {'prompt_file': str(Path(prompt_path).resolve().relative_to(TASK_ROOT)),
+    receipt = {'prompt_file': str(Path(prompt_path).resolve()),
                'prompt_sha256': hashlib.sha256(text.encode()).hexdigest(),
                'characters_per_request': len(text), 'verified_model_character_limit': MODEL_REQUEST_CHARACTER_LIMIT, 'requested_takes': takes,
                'model_id': MODEL_ID, 'voice_id': VOICE_ID, 'voice_settings': VOICE_SETTINGS,
                'output_format': 'mp3_44100_128', 'takes': [],
                'human_approval': 'pending', 'timeline_placement': 'not performed'}
-    receipt_path.write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+    with receipt_path.open('x', encoding='utf-8') as output:
+        output.write(json.dumps(receipt, indent=2) + '\n')
     for number, destination in enumerate(destinations, 1):
         audio, metadata = request('text-to-speech/' + VOICE_ID + '?output_format=mp3_44100_128',
                                   {'text': text, 'model_id': MODEL_ID, 'voice_settings': VOICE_SETTINGS})
@@ -97,7 +100,7 @@ def audition(prompt_path, output_prefix, takes):
             raise RuntimeError('Unexpected response; inspect the request log before retrying.')
         with destination.open('xb') as output:
             output.write(audio)
-        receipt['takes'].append({'generation': number, 'file': str(destination.relative_to(TASK_ROOT)),
+        receipt['takes'].append({'generation': number, 'file': str(destination),
                                  'bytes': len(audio), 'sha256': hashlib.sha256(audio).hexdigest(),
                                  'response': metadata})
         receipt_path.write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
